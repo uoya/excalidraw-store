@@ -22,6 +22,7 @@ jobs:
       - name: Install and check
         run: |
           npm ci
+          npm run format:check
           npm run lint
           npm run typecheck
 

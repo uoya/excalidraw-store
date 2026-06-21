@@ -1,16 +1,15 @@
 {
   "name": "excalidraw-store",
   "version": "2.0.0",
-  "license": "MIT",
   "private": true,
+  "license": "MIT",
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
   "scripts": {
     "dev": "node --watch --env-file-if-exists=.env index.ts",
     "start": "node --env-file-if-exists=.env index.ts",
     "lint": "oxlint",
+    "format": "oxfmt --write",
+    "format:check": "oxfmt --check",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,7 +17,11 @@
   },
   "devDependencies": {
     "@types/node": "22.20.0",
+    "oxfmt": "0.55.0",
     "oxlint": "1.70.0",
     "typescript": "6.0.3"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

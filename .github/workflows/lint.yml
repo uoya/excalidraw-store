@@ -15,8 +15,14 @@ jobs:
           node-version: 22.x
           cache: npm
 
-      - name: Install and lint
-        run: |
-          npm ci
-          npm run lint
-          npm run typecheck
+      - name: Install
+        run: npm ci
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck

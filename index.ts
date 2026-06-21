@@ -3,11 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Readable } from "node:stream";
-import {
-  GetObjectCommand,
-  PutObjectCommand,
-  S3Client,
-} from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 // All configuration comes from environment variables only.
 const REQUIRED = [
@@ -25,14 +21,8 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-const {
-  S3_ENDPOINT,
-  S3_REGION,
-  S3_BUCKET,
-  S3_ACCESS_KEY_ID,
-  S3_SECRET_ACCESS_KEY,
-  ALLOW_ORIGINS,
-} = process.env as Record<(typeof REQUIRED)[number], string>;
+const { S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, ALLOW_ORIGINS } =
+  process.env as Record<(typeof REQUIRED)[number], string>;
 
 const allowOrigins = ALLOW_ORIGINS.split(",")
   .map((origin) => origin.trim())
@@ -76,9 +66,7 @@ const applyCors = (req: IncomingMessage, res: ServerResponse, path: string): voi
 
 const getObject = async (res: ServerResponse, key: string): Promise<void> => {
   try {
-    const object = await s3.send(
-      new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }),
-    );
+    const object = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
     res.writeHead(200, { "content-type": "application/octet-stream" });
     (object.Body as Readable).pipe(res);
   } catch (error) {
