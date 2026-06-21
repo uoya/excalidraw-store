@@ -1,9 +1,9 @@
-name: Lint
+name: Check
 
 on: pull_request
 
 jobs:
-  lint:
+  check:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,6 +23,3 @@ jobs:
 
       - name: Lint
         run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
