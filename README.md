@@ -1,24 +1,43 @@
-> this repo replaces a previous implementation in https://github.com/excalidraw/excalidraw-json
-
 # Excalidraw Store
 
-The server that stores all the encrypted sharable drawings from [Excalidraw](https://excalidraw.com) on Google Storage.
+The server that stores the encrypted, shareable drawings from
+[Excalidraw](https://excalidraw.com) on any S3-compatible object storage
+(AWS S3, [RustFS](https://rustfs.com), MinIO, …).
 
 ## Development
 
-Get the [`service key`](https://cloud.google.com/iam/docs/creating-managing-service-account-keys) as JSON and store it under `keys` directory with the name of the project ID.
-
-### Commands
+Requires Node.js 22+ (TypeScript runs directly via Node's native type
+stripping — no build step).
 
 ```
-yarn dev
-yarn start
-yarn build
-yarn deploy
-yarn deploy:dev
-yarn fix
-yarn test
+npm install
+cp .env.example .env   # then edit to match your storage
+npm run dev            # watch mode
+npm start              # run once
+npm run lint           # oxlint
+npm run typecheck      # tsc --noEmit
 ```
+
+### Local storage with RustFS
+
+Run a local [RustFS](https://rustfs.com) instance, point `.env` at it
+(`S3_ENDPOINT=http://localhost:9000`) and create the bucket named in
+`S3_BUCKET`.
+
+### Configuration
+
+All configuration comes from environment variables (see `.env.example`).
+The server refuses to start and prints the missing names if any are absent:
+
+| Variable               | Description                                |
+| ---------------------- | ------------------------------------------ |
+| `S3_ENDPOINT`          | S3-compatible endpoint URL                 |
+| `S3_REGION`            | Region (any value for non-AWS backends)    |
+| `S3_BUCKET`            | Bucket name                                |
+| `S3_ACCESS_KEY_ID`     | Access key                                 |
+| `S3_SECRET_ACCESS_KEY` | Secret key                                 |
+| `ALLOW_ORIGINS`        | Comma-separated origins allowed to POST    |
+| `PORT`                 | Listen port (optional, defaults to `8080`) |
 
 ## Protocol
 
@@ -31,8 +50,6 @@ https://json.excalidraw.com/api/v2/post/
 ```
 
 #### Binary payload
-
-Example of `binary` payload
 
 ```
 1234567890
@@ -57,16 +74,8 @@ https://json.excalidraw.com/api/v2/5633286537740288
 
 #### Response
 
-Example of binary response. If the id is found it will return the data. Otherwise 404.
+The binary data for the id, or `404` if it does not exist.
 
 ```
 1234567890
-```
-
-## Tips
-
-### Check how many files are on Google Storage
-
-```
-gsutil du gs://excalidraw-json.appspot.com | wc -l
 ```

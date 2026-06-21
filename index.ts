@@ -1,113 +1,160 @@
-import { Storage } from "@google-cloud/storage";
-import cors from "cors";
-import express from "express";
-import { nanoid } from "nanoid";
-import favicon from "serve-favicon";
-import * as path from "path";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Readable } from "node:stream";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
-const PROJECT_NAME = process.env.GOOGLE_CLOUD_PROJECT || "excalidraw-json-dev";
-const PROD = PROJECT_NAME === "excalidraw-json";
-const LOCAL = process.env.NODE_ENV !== "production";
-const BUCKET_NAME = PROD
-  ? "excalidraw-json.appspot.com"
-  : "excalidraw-json-dev.appspot.com";
+// All configuration comes from environment variables only.
+const REQUIRED = [
+  "S3_ENDPOINT",
+  "S3_REGION",
+  "S3_BUCKET",
+  "S3_ACCESS_KEY_ID",
+  "S3_SECRET_ACCESS_KEY",
+  "ALLOW_ORIGINS",
+] as const;
 
-const FILE_SIZE_LIMIT = 2 * 1024 * 1024;
-const storage = new Storage(
-  LOCAL
-    ? {
-        projectId: PROJECT_NAME,
-        keyFilename: `${__dirname}/keys/${PROJECT_NAME}.json`,
-      }
-    : undefined
-);
-
-const bucket = storage.bucket(BUCKET_NAME);
-const app = express();
-
-let allowOrigins = [
-  "excalidraw.vercel.app",
-  "https://dai-shi.github.io",
-  "https://excalidraw.com",
-  "https://www.excalidraw.com",
-  "https://math.preview.excalidraw.com",
-];
-if (!PROD) {
-  allowOrigins.push("http://localhost:");
+const missing = REQUIRED.filter((key) => !process.env[key]);
+if (missing.length > 0) {
+  console.error(`Missing environment variables: ${missing.join(", ")}`);
+  process.exit(1);
 }
 
-const corsGet = cors();
-const corsPost = cors((req, callback) => {
-  const origin = req.headers.origin;
-  let isGood = false;
-  if (origin) {
-    for (const allowOrigin of allowOrigins) {
-      if (origin.indexOf(allowOrigin) >= 0) {
-        isGood = true;
-        break;
-      }
+const { S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, ALLOW_ORIGINS } =
+  process.env as Record<(typeof REQUIRED)[number], string>;
+
+const allowOrigins = ALLOW_ORIGINS.split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const PORT = Number(process.env.PORT) || 8080;
+const FILE_SIZE_LIMIT = 2 * 1024 * 1024;
+
+// `forcePathStyle` lets us talk to any S3-compatible backend (RustFS, MinIO, …).
+const s3 = new S3Client({
+  endpoint: S3_ENDPOINT,
+  region: S3_REGION,
+  forcePathStyle: true,
+  credentials: {
+    accessKeyId: S3_ACCESS_KEY_ID,
+    secretAccessKey: S3_SECRET_ACCESS_KEY,
+  },
+});
+
+const indexHtml = await readFile(new URL("./index.html", import.meta.url));
+const favicon = await readFile(new URL("./favicon.ico", import.meta.url));
+
+const json = (res: ServerResponse, status: number, body: unknown): void => {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+};
+
+const isAllowedOrigin = (origin: string | undefined): origin is string =>
+  origin !== undefined && allowOrigins.some((allowed) => origin.includes(allowed));
+
+const applyCors = (req: IncomingMessage, res: ServerResponse, path: string): void => {
+  // Reads are public; writes are restricted to the allow-listed origins.
+  if (path === "/api/v2/post/") {
+    if (isAllowedOrigin(req.headers.origin)) {
+      res.setHeader("access-control-allow-origin", req.headers.origin);
+    }
+  } else {
+    res.setHeader("access-control-allow-origin", "*");
+  }
+};
+
+const getObject = async (res: ServerResponse, key: string): Promise<void> => {
+  try {
+    const object = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+    res.writeHead(200, { "content-type": "application/octet-stream" });
+    (object.Body as Readable).pipe(res);
+  } catch (error) {
+    console.error(error);
+    json(res, 404, { message: "Could not find the file." });
+  }
+};
+
+const putObject = (req: IncomingMessage, res: ServerResponse): void => {
+  const chunks: Buffer[] = [];
+  let size = 0;
+
+  req.on("data", (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > FILE_SIZE_LIMIT) {
+      json(res, 413, { message: "Data is too large.", max_limit: FILE_SIZE_LIMIT });
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+
+  req.on("end", async () => {
+    if (res.writableEnded) return;
+    const id = randomUUID();
+    try {
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: id,
+          Body: Buffer.concat(chunks),
+        }),
+      );
+      const proto = req.headers["x-forwarded-proto"] ?? "http";
+      json(res, 200, {
+        id,
+        data: `${proto}://${req.headers.host}/api/v2/${id}`,
+      });
+    } catch (error) {
+      console.error(error);
+      json(res, 500, { message: "Could not upload the data." });
+    }
+  });
+};
+
+const server = createServer((req, res) => {
+  const path = (req.url ?? "/").split("?")[0];
+  const method = req.method ?? "GET";
+
+  if (path.startsWith("/api/")) applyCors(req, res, path);
+
+  if (method === "OPTIONS") {
+    res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+    res.setHeader(
+      "access-control-allow-headers",
+      req.headers["access-control-request-headers"] ?? "*",
+    );
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  if (method === "GET" && path === "/") {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(indexHtml);
+    return;
+  }
+
+  if (method === "GET" && path === "/favicon.ico") {
+    res.writeHead(200, { "content-type": "image/x-icon" });
+    res.end(favicon);
+    return;
+  }
+
+  if (method === "POST" && path === "/api/v2/post/") {
+    putObject(req, res);
+    return;
+  }
+
+  if (method === "GET" && path.startsWith("/api/v2/")) {
+    const key = path.slice("/api/v2/".length);
+    if (key) {
+      void getObject(res, key);
+      return;
     }
   }
-  callback(null, { origin: isGood });
+
+  json(res, 404, { message: "Not found." });
 });
 
-app.use(favicon(path.join(__dirname, "favicon.ico")));
-app.get("/", (req, res) => res.sendFile(`${process.cwd()}/index.html`));
-
-app.get("/api/v2/:key", corsGet, async (req, res) => {
-  try {
-    const key = req.params.key;
-    const file = bucket.file(key);
-    await file.getMetadata();
-    res.status(200);
-    res.setHeader("content-type", "application/octet-stream");
-    file.createReadStream().pipe(res);
-  } catch (error) {
-    console.error(error);
-    res.status(404).json({ message: "Could not find the file." });
-  }
-});
-
-app.post("/api/v2/post/", corsPost, (req, res) => {
-  try {
-    let fileSize = 0;
-    const id = nanoid();
-    const blob = bucket.file(id);
-    const blobStream = blob.createWriteStream({ resumable: false });
-
-    blobStream.on("error", (error) => {
-      console.error(error);
-      res.status(500).json({ message: error.message });
-    });
-
-    blobStream.on("finish", async () => {
-      res.status(200).json({
-        id,
-        data: `${LOCAL ? "http" : "https"}://${req.get("host")}/api/v2/${id}`,
-      });
-    });
-
-    req.on("data", (chunk) => {
-      blobStream.write(chunk);
-      fileSize += chunk.length;
-      if (fileSize > FILE_SIZE_LIMIT) {
-        const error = {
-          message: "Data is too large.",
-          max_limit: FILE_SIZE_LIMIT,
-        };
-        blobStream.destroy();
-        console.error(error);
-        return res.status(413).json(error);
-      }
-    });
-    req.on("end", () => {
-      blobStream.end();
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Could not upload the data." });
-  }
-});
-
-const port = process.env.PORT || 8080;
-app.listen(port, () => console.log(`http://localhost:${port}`));
+server.listen(PORT, () => console.log(`http://localhost:${PORT}`));

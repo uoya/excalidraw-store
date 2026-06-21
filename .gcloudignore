@@ -2,5 +2,5 @@
 .gcloudignore
 .git
 .gitignore
-keys
+.env
 node_modules
